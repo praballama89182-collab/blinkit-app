@@ -2,128 +2,99 @@ import streamlit as st
 import pandas as pd
 import io
 
-st.set_page_config(page_title="Blinkit Unified Optimizer", layout="wide")
+# Page Setup
+st.set_page_config(page_title="Blinkit Performance Analytics", layout="wide")
 
 def main():
-    st.title("🚀 Unified Blinkit Ad Optimizer")
-    st.markdown("Upload your Blinkit **CSV** or **Excel (.xlsx)** reports to get data-driven bidding suggestions.")
+    st.title("📈 Blinkit Performance & Optimization Summary")
     
-    # 1.4 ROAS Requirement
-    target_roas = st.sidebar.number_input("Target ROAS Threshold", value=1.4, step=0.1)
-    min_spend = st.sidebar.number_input("Min Spend to Flag Waste (₹)", value=200)
+    # 1. Sidebar Filters
+    st.sidebar.header("Filter Configuration")
+    target_roas = st.sidebar.slider("ROAS Threshold Filter", 0.1, 10.0, 1.4)
+    min_spend = st.sidebar.number_input("Min Spend to Suggest Pause (₹)", value=200)
 
-    # UPDATED: Now accepts both csv and xlsx
-    uploaded_files = st.file_uploader("Upload Blinkit Reports", type=['csv', 'xlsx'], accept_multiple_files=True)
+    uploaded_files = st.file_uploader("Upload Blinkit CSV/Excel Files", type=['csv', 'xlsx'], accept_multiple_files=True)
 
     if uploaded_files:
         all_dfs = []
-        
         for file in uploaded_files:
             try:
-                # Handle Excel vs CSV
                 if file.name.endswith('.xlsx'):
-                    # Read all sheets from Excel
                     xl = pd.ExcelFile(file)
-                    for sheet_name in xl.sheet_names:
-                        df_sheet = pd.read_excel(file, sheet_name=sheet_name)
-                        if not df_sheet.empty:
-                            all_dfs.append(df_sheet)
+                    for sheet in xl.sheet_names:
+                        df = pd.read_excel(file, sheet_name=sheet)
+                        all_dfs.append(df)
                 else:
-                    # Read CSV
-                    df_csv = pd.read_csv(file)
-                    all_dfs.append(df_csv)
+                    all_dfs.append(pd.read_csv(file))
             except Exception as e:
                 st.error(f"Error reading {file.name}: {e}")
 
         if all_dfs:
-            # --- CLEANING & STANDARDIZATION ---
-            processed_dfs = []
-            for df in all_dfs:
-                # Clean header spaces
-                df.columns = df.columns.str.strip()
-                
-                # Standardize Column Names (Maps variations to a single key)
-                rename_map = {
-                    'cpm': 'CPM',
-                    'total_budget': 'Total Budget',
-                    'Direct RoAS': 'Direct ROAS',
-                    'Total RoAS': 'Total ROAS',
-                    'Category Name': 'Target',
-                    'Keyword': 'Target',
-                    'Asset': 'Target'
-                }
-                # Apply rename only if the source column exists
-                df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns}, inplace=True)
-                
-                # Ensure we have a 'Target' column
-                if 'Target' not in df.columns:
-                    df['Target'] = "Generic Asset"
+            # Standardization & Cleaning
+            master_df = pd.concat(all_dfs, ignore_index=True, sort=False)
+            master_df.columns = master_df.columns.str.strip()
+            
+            # Map Identifiers
+            if 'Keyword' in master_df.columns: master_df['Target'] = master_df['Keyword']
+            elif 'Category Name' in master_df.columns: master_df['Target'] = master_df['Category Name']
+            elif 'Asset' in master_df.columns: master_df['Target'] = master_df['Asset']
+            else: master_df['Target'] = "Unknown"
 
-                # Convert Numeric fields safely
-                numeric_cols = ['Direct Sales', 'Estimated Budget Consumed', 'CPM', 'Direct ROAS', 'Impressions', 'New Users']
-                for col in numeric_cols:
-                    if col in df.columns:
-                        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-                
-                processed_dfs.append(df)
+            # Numeric Conversions
+            cols = ['Direct Sales', 'Estimated Budget Consumed', 'CPM', 'Direct RoAS']
+            for col in cols:
+                if col in master_df.columns:
+                    master_df[col] = pd.to_numeric(master_df[col], errors='coerce').fillna(0)
 
-            # Combine everything into one master report
-            master_df = pd.concat(processed_dfs, ignore_index=True, sort=False)
+            # --- PERFORMANCE SUMMARY BIFURCATIONS ---
 
-            # --- DECISION LOGIC ---
-            # Safe calculation using .get() to avoid KeyError
-            def calculate_strategy(row):
-                curr_cpm = row.get('CPM', 0)
-                roas = row.get('Direct ROAS', 0)
-                spend = row.get('Estimated Budget Consumed', 0)
-                sales = row.get('Direct Sales', 0)
+            # A. Top Contributors (Revenue)
+            st.header("🏆 Top Revenue Contributors")
+            top_rev = master_df.groupby(['Target', 'Campaign Name']).agg({
+                'Direct Sales': 'sum',
+                'Direct RoAS': 'mean'
+            }).sort_values(by='Direct Sales', ascending=False).head(10)
+            st.dataframe(top_rev, use_container_width=True)
 
-                # Suggested CPM to hit target ROAS
-                if roas > 0 and curr_cpm > 0:
-                    suggested = curr_cpm * (roas / target_roas)
-                else:
-                    suggested = curr_cpm
+            # B. Above vs Below Threshold
+            col_left, col_right = st.columns(2)
+            
+            with col_left:
+                st.subheader(f"✅ Above Threshold (ROAS >= {target_roas})")
+                above = master_df[master_df['Direct RoAS'] >= target_roas]
+                st.dataframe(above[['Target', 'Campaign Name', 'Direct RoAS']], use_container_width=True)
 
-                # Status bifurcation
-                if sales == 0 and spend > min_spend:
-                    status = "🛑 PAUSE (Waste)"
-                elif roas >= target_roas:
-                    status = "✅ HEALTHY"
-                elif 0 < roas < target_roas:
-                    status = "⚠️ REDUCE BID"
-                else:
-                    status = "🔍 MONITOR"
-                
-                return pd.Series([suggested, status])
+            with col_right:
+                st.subheader(f"⚠️ Below Threshold (ROAS < {target_roas})")
+                below = master_df[(master_df['Direct RoAS'] < target_roas) & (master_df['Direct RoAS'] > 0)]
+                st.dataframe(below[['Target', 'Campaign Name', 'Direct RoAS']], use_container_width=True)
 
-            master_df[['Suggested CPM', 'Strategy']] = master_df.apply(calculate_strategy, axis=1)
+            # C. Strategic Suggestions (Pause & CPM Management)
+            st.header("💡 Strategic Recommendations")
+            
+            # Logic for Pause
+            pause_df = master_df[(master_df['Direct Sales'] == 0) & (master_df['Estimated Budget Consumed'] > min_spend)]
+            
+            # Logic for CPM Decrease (Sales are good, ROAS is good, but CPM is very high)
+            # We define 'High CPM' as top 25% of the current campaign CPMs
+            avg_cpm = master_df['CPM'].mean()
+            cpm_optimize = master_df[(master_df['Direct RoAS'] >= target_roas) & (master_df['CPM'] > avg_cpm)]
 
-            # --- DASHBOARD TABS ---
-            tab1, tab2, tab3 = st.tabs(["📊 Performance Summary", "💡 Bidding Plan", "👥 Growth (New Users)"])
+            tab_pause, tab_cpm = st.tabs(["🛑 Suggestions to Pause", "📉 CPM Optimization"])
 
-            with tab1:
-                col1, col2, col3 = st.columns(3)
-                col1.metric("Total Spend", f"₹{master_df['Estimated Budget Consumed'].sum():,.0f}")
-                col2.metric("Total Sales", f"₹{master_df['Direct Sales'].sum():,.0f}")
-                col3.metric("Avg ROAS", f"{(master_df['Direct Sales'].sum()/master_df['Estimated Budget Consumed'].sum()):.2f}x")
-                st.dataframe(master_df, use_container_width=True)
+            with tab_pause:
+                st.warning("These items have high spend but zero revenue. Recommended to Pause.")
+                st.dataframe(pause_df[['Target', 'Campaign Name', 'Estimated Budget Consumed', 'CPM']], use_container_width=True)
 
-            with tab2:
-                st.subheader(f"Bid Adjustments for {target_roas} ROAS Target")
-                # Filter to show only items that actually have spend
-                plan_df = master_df[master_df['Estimated Budget Consumed'] > 0]
-                st.dataframe(plan_df[['Target', 'Campaign Name', 'CPM', 'Direct ROAS', 'Suggested CPM', 'Strategy']])
+            with tab_cpm:
+                st.info("High ROAS but High CPM: You have good sales but can improve margins by gradually decreasing bids.")
+                st.dataframe(cpm_optimize[['Target', 'Campaign Name', 'CPM', 'Direct RoAS']], use_container_width=True)
 
-            with tab3:
-                st.subheader("New User Acquisition Cost")
-                master_df['CAC'] = master_df['Estimated Budget Consumed'] / master_df['New Users'].replace(0, 1)
-                st.dataframe(master_df[master_df['New Users'] > 0][['Target', 'New Users', 'CAC']].sort_values(by='New Users', ascending=False))
-
-            # EXPORT
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                master_df.to_excel(writer, index=False, sheet_name='Optimization_Plan')
-            st.download_button("📥 Download Action Plan", data=output.getvalue(), file_name="blinkit_decision_sheet.xlsx")
+            # Export
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                master_df.to_excel(writer, index=False)
+            st.download_button("📥 Download Full Analysis", data=buffer.getvalue(), file_name="blinkit_performance_report.xlsx")
 
 if __name__ == "__main__":
     main()
