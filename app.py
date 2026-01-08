@@ -2,109 +2,47 @@ import streamlit as st
 import pandas as pd
 import io
 
-# Set Page Config
-st.set_page_config(page_title="Blinkit Ads Optimizer Pro", layout="wide")
+# 1. SETTINGS
+st.set_page_config(page_title="Blinkit Ad Optimizer", layout="wide")
 
-st.title("🎯 Blinkit Bid & ROAS Optimizer")
-st.markdown("Analyze Cannibalization, track CPM, and get automated Bid Reduction suggestions to hit your 1.4 ROAS target.")
-
-# --- File Upload ---
-uploaded_files = st.sidebar.file_uploader("Upload Search Term Reports (CSV)", type="csv", accept_multiple_files=True)
-
-def process_data(files):
-    all_data = []
-    for f in files:
-        temp_df = pd.read_csv(f)
-        temp_df.columns = [c.strip() for c in temp_df.columns]
-        # Identify if it's Keyword or Category based on columns
-        if 'Keyword' in temp_df.columns:
-            temp_df = temp_df.rename(columns={'Keyword': 'Identifier'})
-        elif 'Category Name' in temp_df.columns:
-            temp_df = temp_df.rename(columns={'Category Name': 'Identifier'})
-        all_data.append(temp_df)
-    return pd.concat(all_data, ignore_index=True) if all_data else None
-
-if uploaded_files:
-    df = process_data(uploaded_files)
+# 2. APP LOGIC
+def main():
+    st.title("🚀 Blinkit Search Term Optimizer")
     
-    # Data Cleaning & Formatting
-    cols = ['Direct Sales', 'Estimated Budget Consumed', 'Direct RoAS', 'CPM', 'Impressions']
-    for col in cols:
-        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+    # Target ROAS threshold as requested
+    target_roas = st.sidebar.number_input("Target ROAS Threshold", value=1.4, step=0.1)
+    
+    uploaded_file = st.file_uploader("Upload Blinkit Keyword CSV", type=['csv'])
 
-    # Sidebar Settings
-    target_roas = st.sidebar.slider("Target ROAS Threshold", 0.5, 5.0, 1.4)
-    min_spend_flag = st.sidebar.number_input("Min Spend to Flag 'No Sales'", value=100)
+    if uploaded_file is not None:
+        try:
+            df = pd.read_csv(uploaded_file)
+            df.columns = [c.strip() for c in df.columns]
+            
+            # KPI Calculations
+            df['Direct Sales'] = pd.to_numeric(df['Direct Sales'], errors='coerce').fillna(0)
+            df['Estimated Budget Consumed'] = pd.to_numeric(df['Estimated Budget Consumed'], errors='coerce').fillna(0)
+            df['CPM'] = pd.to_numeric(df['CPM'], errors='coerce').fillna(0)
+            df['Direct RoAS'] = pd.to_numeric(df['Direct RoAS'], errors='coerce').fillna(0)
 
-    # Grouping Data for Analysis
-    analysis = df.groupby(['Identifier', 'Campaign Name']).agg({
-        'CPM': 'mean',
-        'Estimated Budget Consumed': 'sum',
-        'Direct Sales': 'sum',
-        'Direct RoAS': 'mean',
-        'Impressions': 'sum'
-    }).reset_index()
+            # Bid Suggestion Logic
+            # Formula: Suggested Bid = Current CPM * (Current ROAS / Target ROAS)
+            df['Suggested CPM'] = df.apply(
+                lambda x: x['CPM'] * (x['Direct RoAS'] / target_roas) if x['Direct RoAS'] > 0 else 0, 
+                axis=1
+            )
+            
+            st.success("Data Loaded Successfully!")
+            st.dataframe(df[['Keyword', 'Campaign Name', 'CPM', 'Direct RoAS', 'Suggested CPM']].head(20))
+            
+            # Export
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                df.to_excel(writer, index=False, sheet_name='Optimization')
+            st.download_button("Download Optimization Report", data=output.getvalue(), file_name="blinkit_plan.xlsx")
+            
+        except Exception as e:
+            st.error(f"Error processing file: {e}")
 
-    # --- 1. Bid Optimization Logic ---
-    def get_bid_suggestion(row):
-        roas = row['Direct RoAS']
-        curr_cpm = row['CPM']
-        spend = row['Estimated Budget Consumed']
-        
-        if roas >= target_roas:
-            return "✅ HEALTHY", "Maintain or Scale Bid", curr_cpm
-        elif 0 < roas < target_roas:
-            # Formula: New Bid = Current Bid * (Current ROAS / Target ROAS)
-            reduction_pct = (1 - (roas / target_roas)) * 100
-            new_bid = curr_cpm * (roas / target_roas)
-            return "⚠️ INEFFICIENT", f"Reduce Bid by {reduction_pct:.1f}%", new_bid
-        elif spend > min_spend_flag:
-            return "🛑 CRITICAL", "Pause: High Waste / No Sales", 0
-        else:
-            return "🔍 MONITOR", "Low Data", curr_cpm
-
-    analysis[['Status', 'Action', 'Suggested CPM']] = analysis.apply(
-        lambda x: pd.Series(get_bid_suggestion(x)), axis=1
-    )
-
-    # --- 2. Cannibalization Detection ---
-    counts = analysis['Identifier'].value_counts()
-    cannibal_list = counts[counts > 1].index.tolist()
-    analysis['Is Cannibalized'] = analysis['Identifier'].isin(cannibal_list)
-
-    # --- Tabs for Visualization ---
-    tab1, tab2, tab3 = st.tabs(["📉 Bid Optimization", "⚔️ Cannibalization Auditor", "📥 Export Report"])
-
-    with tab1:
-        st.subheader(f"Bid Management (Target ROAS: {target_roas})")
-        
-        # Performance Filter
-        status_filter = st.multiselect("Filter by Status", options=["✅ HEALTHY", "⚠️ INEFFICIENT", "🛑 CRITICAL"], default=["⚠️ INEFFICIENT", "🛑 CRITICAL"])
-        filtered_df = analysis[analysis['Status'].isin(status_filter)]
-        
-        st.dataframe(filtered_df[[
-            'Identifier', 'Campaign Name', 'CPM', 'Direct RoAS', 
-            'Status', 'Action', 'Suggested CPM'
-        ]].sort_values(by='Direct RoAS', ascending=True), use_container_width=True)
-
-    with tab2:
-        st.subheader("Keyword Cannibalization")
-        st.info("These keywords appear in multiple campaigns. Consolidate budget into the campaign with the higher ROAS.")
-        cannibal_df = analysis[analysis['Is Cannibalized'] == True].sort_values(by='Identifier')
-        st.write(cannibal_df[['Identifier', 'Campaign Name', 'CPM', 'Direct RoAS', 'Status']])
-
-    with tab3:
-        st.subheader("Download Optimization Plan")
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            analysis.to_excel(writer, sheet_name='Full Optimization Report', index=False)
-        
-        st.download_button(
-            label="Download Excel Report",
-            data=output.getvalue(),
-            file_name="blinkit_bid_strategy.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-
-else:
-    st.info("Upload your CSV files to see the optimized bid suggestions.")
+if __name__ == "__main__":
+    main()
