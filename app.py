@@ -5,11 +5,11 @@ import plotly.graph_objects as go
 from thefuzz import process
 
 # 1. PAGE SETUP
-st.set_page_config(page_title="Blinkit Ads Intelligence Pro", layout="wide")
+st.set_page_config(page_title="Blinkit Ads Strategic Engine", layout="wide")
 
 def main():
     st.title("🚀 Blinkit Ads Strategic Decision Engine")
-    st.markdown("Analyze Performance, Weekly Trends, and Funnel Metrics to drive ROAS.")
+    st.markdown("Comprehensive analysis of Weekly Trends, ROAS Efficiency, and Bidding Strategy.")
 
     # 2. SIDEBAR CONFIGURATION
     st.sidebar.header("🎯 Strategy Parameters")
@@ -43,7 +43,7 @@ def main():
             elif 'Asset' in master_df.columns: master_df['Target'] = master_df['Asset']
             else: master_df['Target'] = "N/A"
 
-            # Date Conversion and Weekly Sorting
+            # Date Conversion for Trend Analysis
             if 'date_ist' in master_df.columns:
                 master_df['date_ist'] = pd.to_datetime(master_df['date_ist'])
                 master_df['Day of Week'] = master_df['date_ist'].dt.day_name()
@@ -70,11 +70,10 @@ def main():
                 campaign_options = ["All Campaigns"] + all_campaigns
             selected_campaign = st.sidebar.selectbox("Select Campaign", campaign_options)
 
-            # Apply Filtering
             plot_df = master_df if selected_campaign == "All Campaigns" else master_df[master_df['Campaign Name'] == selected_campaign]
 
             # --- 4. BIFURCATED TABS ---
-            tab_trend, tab_perf, tab_eff, tab_bids = st.tabs(["📅 Weekly Trends", "🏆 Performance", "🛑 Waste Audit", "⚖️ Bidding"])
+            tab_trend, tab_perf, tab_eff, tab_bids = st.tabs(["📅 Weekly Trends", "🏆 Performance Summary", "🛑 Waste Audit", "⚖️ Bidding Strategy"])
 
             with tab_trend:
                 st.header(f"Weekly Trend Analysis: {selected_campaign}")
@@ -84,53 +83,61 @@ def main():
                         'Direct Sales': 'sum'
                     }).reset_index()
 
-                    # Create Grouped Bar + Line Chart
+                    # Combined Bar and Line Chart
                     fig = go.Figure()
                     fig.add_trace(go.Bar(x=weekly_data['Day of Week'], y=weekly_data['Estimated Budget Consumed'], 
                                          name='Budget Spent (₹)', marker_color='#1f77b4'))
                     fig.add_trace(go.Bar(x=weekly_data['Day of Week'], y=weekly_data['Direct Sales'], 
                                          name='Direct Sales (₹)', marker_color='#2ca02c'))
                     
-                    # Add ROAS Trend Line on Secondary Axis
+                    # ROAS Trend Line
                     weekly_data['ROAS'] = weekly_data['Direct Sales'] / weekly_data['Estimated Budget Consumed'].replace(0, 1)
                     fig.add_trace(go.Scatter(x=weekly_data['Day of Week'], y=weekly_data['ROAS'], 
                                              name='ROAS Trend', yaxis='y2', line=dict(color='#d62728', width=3)))
 
                     fig.update_layout(
-                        title='Budget Spent vs Direct Sales with ROAS Trend Line',
-                        xaxis_title='Day of the Week (Mon - Sun)',
+                        title='Daily Spent vs Sales (Monday to Sunday)',
+                        xaxis_title='Day of the Week',
                         yaxis=dict(title='Amount (₹)'),
-                        yaxis2=dict(title='ROAS', overlaying='y', side='right', range=[0, weekly_data['ROAS'].max() + 1]),
-                        barmode='group',
-                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                        yaxis2=dict(title='ROAS Efficiency', overlaying='y', side='right'),
+                        barmode='group'
                     )
                     st.plotly_chart(fig, use_container_width=True)
                 else:
                     st.info("Missing date data for weekly analysis.")
 
             with tab_perf:
-                st.subheader("Top Revenue Contributors")
-                summary = plot_df.groupby(['Target', 'Campaign Name']).agg({'Direct Sales': 'sum', 'Direct RoAS': 'mean'}).sort_values(by='Direct Sales', ascending=False)
+                st.subheader("High-Resolution Performance List")
+                summary = plot_df.groupby(['Target', 'Campaign Name']).agg({
+                    'Direct Sales': 'sum',
+                    'Direct RoAS': 'mean'
+                }).sort_values(by='Direct Sales', ascending=False).reset_index()
+                
                 c1, c2 = st.columns(2)
                 with c1:
-                    st.write("**✅ Healthy Assets (ROAS >= Threshold)**")
-                    st.dataframe(summary[summary['Direct RoAS'] >= target_roas], use_container_width=True)
+                    st.success(f"**Healthy Assets (ROAS >= {target_roas})**")
+                    above_df = summary[summary['Direct RoAS'] >= target_roas]
+                    st.write(f"Showing {len(above_df)} items")
+                    st.dataframe(above_df, use_container_width=True, height=500)
+                    
                 with c2:
-                    st.write("**⚠️ Below Target (ROAS < Threshold)**")
-                    st.dataframe(summary[(summary['Direct RoAS'] < target_roas) & (summary['Direct RoAS'] > 0)], use_container_width=True)
+                    st.error(f"**Below Target (ROAS < {target_roas})**")
+                    below_df = summary[(summary['Direct RoAS'] < target_roas) & (summary['Direct RoAS'] > 0)]
+                    st.write(f"Showing {len(below_df)} items")
+                    st.dataframe(below_df, use_container_width=True, height=500)
 
             with tab_eff:
                 st.subheader("Inefficiency & Pause Suggestions")
                 pause_logic = plot_df[(plot_df['Direct Sales'] == 0) & (plot_df['Estimated Budget Consumed'] > min_spend_waste)]
-                st.warning(f"Pause these: Spent > ₹{min_spend_waste} with 0 Direct Sales")
-                st.dataframe(pause_logic[['Target', 'Campaign Name', 'Estimated Budget Consumed', 'CPM']], use_container_width=True)
+                st.warning(f"Total {len(pause_logic)} items flagged for zero sales waste.")
+                st.dataframe(pause_logic[['Target', 'Campaign Name', 'Estimated Budget Consumed', 'CPM']], use_container_width=True, height=400)
 
             with tab_bids:
-                st.subheader("Actionable Bidding Strategy")
+                st.subheader("CPM Optimization Engine")
                 avg_cpm = plot_df['CPM'].mean()
-                st.info("High ROAS/Sales but High CPM. Recommendation: Decrease bid to improve profit.")
                 cpm_opt = plot_df[(plot_df['Direct RoAS'] >= target_roas) & (plot_df['CPM'] > avg_cpm)]
-                st.dataframe(cpm_opt[['Target', 'Campaign Name', 'CPM', 'Direct RoAS', 'Direct Sales']], use_container_width=True)
+                st.info(f"Identified {len(cpm_opt)} high-volume items where bid reduction could increase profit margins.")
+                st.dataframe(cpm_opt[['Target', 'Campaign Name', 'CPM', 'Direct RoAS', 'Direct Sales']], use_container_width=True, height=600)
 
             # 5. EXPORT
             buffer = io.BytesIO()
