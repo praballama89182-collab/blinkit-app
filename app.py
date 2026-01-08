@@ -1,48 +1,28 @@
-import streamlit as st
-import pandas as pd
-import io
+st.sidebar.header("Analysis Bifurcation")
+view = st.sidebar.selectbox("Choose Perspective", [
+    "Performance (Sales/ROAS)", 
+    "Efficiency (Wasted Spend)", 
+    "Customer Growth (New Users)",
+    "Visibility (Position/CPM)"
+])
 
-# 1. SETTINGS
-st.set_page_config(page_title="Blinkit Ad Optimizer", layout="wide")
+if view == "Performance (Sales/ROAS)":
+    st.subheader("High-Performing Assets")
+    # Show Top 10 by Direct Sales
+    st.dataframe(master_df.nlargest(10, 'Direct Sales'))
 
-# 2. APP LOGIC
-def main():
-    st.title("🚀 Blinkit Search Term Optimizer")
-    
-    # Target ROAS threshold as requested
-    target_roas = st.sidebar.number_input("Target ROAS Threshold", value=1.4, step=0.1)
-    
-    uploaded_file = st.file_uploader("Upload Blinkit Keyword CSV", type=['csv'])
+elif view == "Efficiency (Wasted Spend)":
+    st.subheader("Money Bleeding (High Spend, Low Sales)")
+    bleeding = master_df[(master_df['Estimated Budget Consumed'] > 150) & (master_df['Direct Sales'] == 0)]
+    st.dataframe(bleeding.sort_values(by='Estimated Budget Consumed', ascending=False))
 
-    if uploaded_file is not None:
-        try:
-            df = pd.read_csv(uploaded_file)
-            df.columns = [c.strip() for c in df.columns]
-            
-            # KPI Calculations
-            df['Direct Sales'] = pd.to_numeric(df['Direct Sales'], errors='coerce').fillna(0)
-            df['Estimated Budget Consumed'] = pd.to_numeric(df['Estimated Budget Consumed'], errors='coerce').fillna(0)
-            df['CPM'] = pd.to_numeric(df['CPM'], errors='coerce').fillna(0)
-            df['Direct RoAS'] = pd.to_numeric(df['Direct RoAS'], errors='coerce').fillna(0)
+elif view == "Customer Growth (New Users)":
+    st.subheader("New User Acquisition Cost")
+    master_df['CAC'] = master_df['Estimated Budget Consumed'] / master_df['New Users'].replace(0, 1)
+    st.dataframe(master_df[['Target', 'New Users', 'CAC']].sort_values(by='New Users', ascending=False))
 
-            # Bid Suggestion Logic
-            # Formula: Suggested Bid = Current CPM * (Current ROAS / Target ROAS)
-            df['Suggested CPM'] = df.apply(
-                lambda x: x['CPM'] * (x['Direct RoAS'] / target_roas) if x['Direct RoAS'] > 0 else 0, 
-                axis=1
-            )
-            
-            st.success("Data Loaded Successfully!")
-            st.dataframe(df[['Keyword', 'Campaign Name', 'CPM', 'Direct RoAS', 'Suggested CPM']].head(20))
-            
-            # Export
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                df.to_excel(writer, index=False, sheet_name='Optimization')
-            st.download_button("Download Optimization Report", data=output.getvalue(), file_name="blinkit_plan.xlsx")
-            
-        except Exception as e:
-            st.error(f"Error processing file: {e}")
-
-if __name__ == "__main__":
-    main()
+elif view == "Visibility (Position/CPM)":
+    st.subheader("Share of Shelf & Auction Health")
+    st.write("Correlation between Bid (CPM) and Page Position")
+    # Position logic: Lower number is better (Position 1 is top)
+    st.dataframe(master_df[['Target', 'CPM', 'Most Viewed Position', 'Impressions']])
