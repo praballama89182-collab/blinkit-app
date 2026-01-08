@@ -46,11 +46,25 @@ def main():
                 if col in master_df.columns:
                     master_df[col] = pd.to_numeric(master_df[col], errors='coerce').fillna(0)
 
-            # --- PERFORMANCE SUMMARY BIFURCATIONS ---
+            # --- NEW: CAMPAIGN FILTER DROPDOWN ---
+            st.sidebar.markdown("---")
+            st.sidebar.header("Campaign Drill-down")
+            campaigns = master_df['Campaign Name'].dropna().unique().tolist()
+            campaign_options = ["All Campaigns"] + sorted(campaigns)
+            selected_campaign = st.sidebar.selectbox("Choose Campaign", campaign_options)
+
+            # Apply Campaign Filter to the main dataframe
+            if selected_campaign != "All Campaigns":
+                filtered_df = master_df[master_df['Campaign Name'] == selected_campaign]
+            else:
+                filtered_df = master_df
+
+            # Use filtered_df for all subsequent metrics
+            # -----------------------------------------------------------------
 
             # A. Top Contributors (Revenue)
-            st.header("🏆 Top Revenue Contributors")
-            top_rev = master_df.groupby(['Target', 'Campaign Name']).agg({
+            st.header(f"🏆 Top Revenue Contributors: {selected_campaign}")
+            top_rev = filtered_df.groupby(['Target', 'Campaign Name']).agg({
                 'Direct Sales': 'sum',
                 'Direct RoAS': 'mean'
             }).sort_values(by='Direct Sales', ascending=False).head(10)
@@ -61,24 +75,23 @@ def main():
             
             with col_left:
                 st.subheader(f"✅ Above Threshold (ROAS >= {target_roas})")
-                above = master_df[master_df['Direct RoAS'] >= target_roas]
+                above = filtered_df[filtered_df['Direct RoAS'] >= target_roas]
                 st.dataframe(above[['Target', 'Campaign Name', 'Direct RoAS']], use_container_width=True)
 
             with col_right:
                 st.subheader(f"⚠️ Below Threshold (ROAS < {target_roas})")
-                below = master_df[(master_df['Direct RoAS'] < target_roas) & (master_df['Direct RoAS'] > 0)]
+                below = filtered_df[(filtered_df['Direct RoAS'] < target_roas) & (filtered_df['Direct RoAS'] > 0)]
                 st.dataframe(below[['Target', 'Campaign Name', 'Direct RoAS']], use_container_width=True)
 
             # C. Strategic Suggestions (Pause & CPM Management)
             st.header("💡 Strategic Recommendations")
             
             # Logic for Pause
-            pause_df = master_df[(master_df['Direct Sales'] == 0) & (master_df['Estimated Budget Consumed'] > min_spend)]
+            pause_df = filtered_df[(filtered_df['Direct Sales'] == 0) & (filtered_df['Estimated Budget Consumed'] > min_spend)]
             
-            # Logic for CPM Decrease (Sales are good, ROAS is good, but CPM is very high)
-            # We define 'High CPM' as top 25% of the current campaign CPMs
-            avg_cpm = master_df['CPM'].mean()
-            cpm_optimize = master_df[(master_df['Direct RoAS'] >= target_roas) & (master_df['CPM'] > avg_cpm)]
+            # Logic for CPM Decrease
+            avg_cpm = filtered_df['CPM'].mean()
+            cpm_optimize = filtered_df[(filtered_df['Direct RoAS'] >= target_roas) & (filtered_df['CPM'] > avg_cpm)]
 
             tab_pause, tab_cpm = st.tabs(["🛑 Suggestions to Pause", "📉 CPM Optimization"])
 
@@ -93,8 +106,9 @@ def main():
             # Export
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                master_df.to_excel(writer, index=False)
-            st.download_button("📥 Download Full Analysis", data=buffer.getvalue(), file_name="blinkit_performance_report.xlsx")
+                # We export the filtered view if one is selected, or the master view otherwise
+                filtered_df.to_excel(writer, index=False)
+            st.download_button("📥 Download Analysis", data=buffer.getvalue(), file_name=f"blinkit_{selected_campaign.lower().replace(' ', '_')}_report.xlsx")
 
 if __name__ == "__main__":
     main()
