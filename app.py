@@ -51,7 +51,7 @@ def main():
                 master_df['Day of Week'] = pd.Categorical(master_df['Day of Week'], categories=day_order, ordered=True)
 
             # Numeric Conversion
-            numeric_cols = ['Direct Sales', 'Estimated Budget Consumed', 'CPM', 'Direct RoAS']
+            numeric_cols = ['Direct Sales', 'Estimated Budget Consumed', 'CPM', 'Direct RoAS', 'Impressions', 'Most Viewed Position']
             for col in numeric_cols:
                 if col in master_df.columns:
                     master_df[col] = pd.to_numeric(master_df[col], errors='coerce').fillna(0)
@@ -70,7 +70,22 @@ def main():
                 campaign_options = ["All Campaigns"] + all_campaigns
             selected_campaign = st.sidebar.selectbox("Select Campaign", campaign_options)
 
+            # Subset data for plotting/analysis based on selected campaign
             plot_df = master_df if selected_campaign == "All Campaigns" else master_df[master_df['Campaign Name'] == selected_campaign]
+
+            # --- AGGREGATION FOR WASTE AUDIT & PERFORMANCE ---
+            # Group by Target and Campaign to avoid repeating keywords
+            summary_df = plot_df.groupby(['Target', 'Campaign Name'], as_index=False).agg({
+                'Direct Sales': 'sum',
+                'Estimated Budget Consumed': 'sum',
+                'Impressions': 'sum',
+                'CPM': 'mean',
+                'Most Viewed Position': 'mean',
+                'Direct RoAS': 'mean' # Or recalculate: sum(Sales)/sum(Spend)
+            })
+            
+            # Recalculate ROAS at the aggregated level for accuracy
+            summary_df['Aggregated ROAS'] = summary_df['Direct Sales'] / summary_df['Estimated Budget Consumed'].replace(0, 1)
 
             # --- 4. BIFURCATED TABS ---
             tab_trend, tab_perf, tab_eff, tab_bids = st.tabs(["📅 Weekly Trends", "🏆 Performance Summary", "🛑 Waste Audit", "⚖️ Bidding Strategy"])
@@ -108,42 +123,46 @@ def main():
 
             with tab_perf:
                 st.subheader("High-Resolution Performance List")
-                summary = plot_df.groupby(['Target', 'Campaign Name']).agg({
-                    'Direct Sales': 'sum',
-                    'Direct RoAS': 'mean'
-                }).sort_values(by='Direct Sales', ascending=False).reset_index()
+                summary_sorted = summary_df.sort_values(by='Direct Sales', ascending=False)
                 
                 c1, c2 = st.columns(2)
                 with c1:
                     st.success(f"**Healthy Assets (ROAS >= {target_roas})**")
-                    above_df = summary[summary['Direct RoAS'] >= target_roas]
+                    above_df = summary_sorted[summary_sorted['Aggregated ROAS'] >= target_roas]
                     st.write(f"Showing {len(above_df)} items")
                     st.dataframe(above_df, use_container_width=True, height=500)
                     
                 with c2:
                     st.error(f"**Below Target (ROAS < {target_roas})**")
-                    below_df = summary[(summary['Direct RoAS'] < target_roas) & (summary['Direct RoAS'] > 0)]
+                    below_df = summary_sorted[(summary_sorted['Aggregated ROAS'] < target_roas) & (summary_sorted['Aggregated ROAS'] > 0)]
                     st.write(f"Showing {len(below_df)} items")
                     st.dataframe(below_df, use_container_width=True, height=500)
 
             with tab_eff:
-                st.subheader("Inefficiency & Pause Suggestions")
-                pause_logic = plot_df[(plot_df['Direct Sales'] == 0) & (plot_df['Estimated Budget Consumed'] > min_spend_waste)]
-                st.warning(f"Total {len(pause_logic)} items flagged for zero sales waste.")
-                st.dataframe(pause_logic[['Target', 'Campaign Name', 'Estimated Budget Consumed', 'CPM']], use_container_width=True, height=400)
+                st.subheader("Waste Audit: High Spend, No Sales")
+                # Apply filter to aggregated data so keywords are unique per campaign
+                pause_logic = summary_df[(summary_df['Direct Sales'] == 0) & (summary_df['Estimated Budget Consumed'] > min_spend_waste)]
+                pause_logic = pause_logic.sort_values(by='Estimated Budget Consumed', ascending=False)
+                
+                st.warning(f"Total {len(pause_logic)} unique items flagged for zero sales waste.")
+                st.dataframe(pause_logic[['Target', 'Campaign Name', 'Estimated Budget Consumed', 'Impressions', 'CPM', 'Most Viewed Position']], 
+                             use_container_width=True, height=500)
 
             with tab_bids:
                 st.subheader("CPM Optimization Engine")
-                avg_cpm = plot_df['CPM'].mean()
-                cpm_opt = plot_df[(plot_df['Direct RoAS'] >= target_roas) & (plot_df['CPM'] > avg_cpm)]
-                st.info(f"Identified {len(cpm_opt)} high-volume items where bid reduction could increase profit margins.")
-                st.dataframe(cpm_opt[['Target', 'Campaign Name', 'CPM', 'Direct RoAS', 'Direct Sales']], use_container_width=True, height=600)
+                # Using aggregated metrics for better bid decisions
+                avg_cpm = summary_df['CPM'].mean()
+                cpm_opt = summary_df[(summary_df['Aggregated ROAS'] >= target_roas) & (summary_df['CPM'] > avg_cpm)]
+                st.info(f"Identified {len(cpm_opt)} unique high-volume items where bid reduction could increase profit margins.")
+                st.dataframe(cpm_opt[['Target', 'Campaign Name', 'CPM', 'Aggregated ROAS', 'Direct Sales']], 
+                             use_container_width=True, height=600)
 
             # 5. EXPORT
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                plot_df.to_excel(writer, index=False)
-            st.download_button("📥 Download Analysis", data=buffer.getvalue(), file_name="blinkit_strategy.xlsx")
+                # Export the aggregated summary
+                summary_df.to_excel(writer, index=False, sheet_name='Aggregated_Strategy')
+            st.download_button("📥 Download Aggregated Analysis", data=buffer.getvalue(), file_name="blinkit_strategy.xlsx")
 
 if __name__ == "__main__":
     main()
